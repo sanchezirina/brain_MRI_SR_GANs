@@ -78,13 +78,13 @@ def discriminator(input_disc, kernel, reuse, is_train=True):
 # img_widht, img_height, img_depth = [224,224,152]
 
 
-def generator(input_gen, kernel, nb, upscaling_factor, reuse, is_train=True):
+def generator(input_gen, kernel, nb, upscaling_factor, reuse, feature_size, is_train=True):
     w_init = tf.random_normal_initializer(stddev=0.02)
 
     with tf.variable_scope("SRGAN_g", reuse=reuse):
         tl.layers.set_name_reuse(reuse)
         x = InputLayer(input_gen, name='in')
-        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 1, 32], strides=[1, 1, 1, 1, 1],
+        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 1, feature_size], strides=[1, 1, 1, 1, 1],
                         padding='SAME', W_init=w_init, name='conv1')
         x = BatchNormLayer(x, act=lrelu1, is_train=is_train, name='BN-conv1')
         inputRB = x
@@ -92,10 +92,10 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, is_train=True):
 
         # residual blocks
         for i in range(nb):
-            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 32, 32], strides=[1, 1, 1, 1, 1],
+            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size], strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init, name='conv1-rb/%s' % i)
             x = BatchNormLayer(x, act=lrelu1, is_train=is_train, name='BN1-rb/%s' % i)
-            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 32, 32], strides=[1, 1, 1, 1, 1],
+            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size], strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init, name='conv2-rb/%s' % i)
             x = BatchNormLayer(x, is_train=is_train, name='BN2-rb/%s' % i, )
             # short skip connection
@@ -103,7 +103,7 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, is_train=True):
             inputadd = x
 
         # large skip connection
-        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 32, 32], strides=[1, 1, 1, 1, 1],
+        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size], strides=[1, 1, 1, 1, 1],
                         padding='SAME', W_init=w_init, name='conv2')
         x = BatchNormLayer(x, is_train=is_train, name='BN-conv2')
         x = ElementwiseLayer([x, inputRB], tf.add, name='add-conv2')
@@ -111,23 +111,26 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, is_train=True):
         # at that point, x=[batchsize,32,32,23,32]
 
         # upscaling block 1
-        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 32, 64], act=lrelu1, strides=[1, 1, 1, 1, 1],
+        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size*2], act=lrelu1, strides=[1, 1, 1, 1, 1],
                         padding='SAME', W_init=w_init, name='conv1-ub/1')
         x = UpSampling3D(name='UpSampling3D_1')(x.outputs)
-        x = Conv3dLayer(InputLayer(x, name='in ub1 conv2'), shape=[kernel, kernel, kernel, 64, 64], act=lrelu1,
+        x = Conv3dLayer(InputLayer(x, name='in ub1 conv2'), shape=[kernel, kernel, kernel, feature_size*2, feature_size*2],
+                        act=lrelu1,
                         strides=[1, 1, 1, 1, 1],
                         padding='SAME', W_init=w_init, name='conv2-ub/1')
 
         # upscaling block 2
         if upscaling_factor == 4:
-            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 64, 64], act=lrelu1, strides=[1, 1, 1, 1, 1],
+            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size*2, feature_size*2], act=lrelu1,
+                            strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init, name='conv1-ub/2')
             x = UpSampling3D(name='UpSampling3D_1')(x.outputs)
-            x = Conv3dLayer(InputLayer(x, name='in ub2 conv2'), shape=[kernel, kernel, kernel, 64, 64], act=lrelu1,
+            x = Conv3dLayer(InputLayer(x, name='in ub2 conv2'), shape=[kernel, kernel, kernel, feature_size*2,
+                                                                       feature_size*2], act=lrelu1,
                             strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init, name='conv2-ub/2')
 
-        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 64, 1], strides=[1, 1, 1, 1, 1],
+        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size*2, 1], strides=[1, 1, 1, 1, 1],
                         act=tf.nn.tanh, padding='SAME', W_init=w_init, name='convlast')
 
         return x

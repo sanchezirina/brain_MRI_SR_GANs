@@ -77,7 +77,7 @@ def discriminator(input_disc, kernel, reuse, is_train=True):
 
 
 # img_widht, img_height, img_depth = [224,224,152]
-def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_height, img_depth, is_train=True):
+def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_height, img_depth, feature_size, is_train=True):
     w_init = tf.random_normal_initializer(stddev=0.02)
 
     # initialize weights for smaller convolution kernels (scaled down by the stride, this is what they refer
@@ -85,17 +85,17 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_hei
     # (= by replicating the pixel values).This ensures the transposed convolution initially behaves
     # like a small convolution followed by nearest neighbor upscaling, and then refines the weights from there
 
-    w_init_subpixel1 = np.random.normal(scale=0.02, size=[3, 3, 3, 4, 64])
+    w_init_subpixel1 = np.random.normal(scale=0.02, size=[3, 3, 3, 4, feature_size])
     w_init_subpixel1 = zoom(w_init_subpixel1, [2, 2, 2, 1, 1], order=0)
     w_init_subpixel1_last = tf.constant_initializer(w_init_subpixel1)
-    w_init_subpixel2 = np.random.normal(scale=0.02, size=[3, 3, 3, 8, 64])
+    w_init_subpixel2 = np.random.normal(scale=0.02, size=[3, 3, 3, 8, feature_size])
     w_init_subpixel2 = zoom(w_init_subpixel2, [2, 2, 2, 1, 1], order=0)
     w_init_subpixel2_last = tf.constant_initializer(w_init_subpixel2)
 
     with tf.variable_scope("SRGAN_g", reuse=reuse):
         tl.layers.set_name_reuse(reuse)
         x = InputLayer(input_gen, name='in')
-        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 1, 32], strides=[1, 1, 1, 1, 1],
+        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 1, feature_size], strides=[1, 1, 1, 1, 1],
                         padding='SAME', W_init=w_init, name='conv1')
         x = BatchNormLayer(x, act=lrelu1, is_train=is_train, name='BN-conv1')
         inputRB = x
@@ -103,10 +103,10 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_hei
 
         # residual blocks
         for i in range(nb):
-            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 32, 32], strides=[1, 1, 1, 1, 1],
+            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size], strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init, name='conv1-rb/%s' % i)
             x = BatchNormLayer(x, act=lrelu1, is_train=is_train, name='BN1-rb/%s' % i)
-            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 32, 32], strides=[1, 1, 1, 1, 1],
+            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size], strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init, name='conv2-rb/%s' % i)
             x = BatchNormLayer(x, is_train=is_train, name='BN2-rb/%s' % i, )
             # short skip connection
@@ -114,7 +114,7 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_hei
             inputadd = x
 
         # large skip connection
-        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 32, 32], strides=[1, 1, 1, 1, 1],
+        x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size], strides=[1, 1, 1, 1, 1],
                         padding='SAME', W_init=w_init, name='conv2')
         x = BatchNormLayer(x, is_train=is_train, name='BN-conv2')
         x = ElementwiseLayer([x, inputRB], tf.add, name='add-conv2')
@@ -126,9 +126,10 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_hei
 
             # upscaling block 1
             arguments = {'img_width': img_width, 'img_height': img_height, 'img_depth': img_depth, 'stepsToEnd': 2,
-                         'n_out_channel': 4}
+                         'n_out_channel': int(feature_size/8)}
             x = LambdaLayer(x, fn=subPixelConv3d, fn_args=arguments, name='SubPixel1')
-            x = Conv3dLayer(x, shape=[kernel * 2, kernel * 2, kernel * 2, 4, 64], act=lrelu1, strides=[1, 1, 1, 1, 1],
+            x = Conv3dLayer(x, shape=[kernel * 2, kernel * 2, kernel * 2, int(feature_size/8), feature_size],
+                            act=lrelu1, strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init_subpixel1_last, name='conv1-ub/1')
 
             # upscaling block 2
@@ -136,33 +137,35 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_hei
                 arguments = {'img_width': img_width, 'img_height': img_height, 'img_depth': img_depth, 'stepsToEnd': 1,
                              'n_out_channel': 8}
                 x = LambdaLayer(x, fn=subPixelConv3d, fn_args=arguments, name='SubPixel2')
-                x = Conv3dLayer(x, shape=[kernel * 2, kernel * 2, kernel * 2, 8, 64], act=lrelu1,
+                x = Conv3dLayer(x, shape=[kernel * 2, kernel * 2, kernel * 2, int(feature_size/8), 64], act=lrelu1,
                                 strides=[1, 1, 1, 1, 1],
                                 padding='SAME', W_init=w_init_subpixel2_last, name='conv1-ub/2')
 
             x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 64, 1], strides=[1, 1, 1, 1, 1],
-                            act=tf.nn.tanh, padding='SAME', W_init=w_init, name='convlast')
+                            padding='SAME', W_init=w_init, name='convlast')
 
         else:
             # # ____________SUBPIXEL - BASELINE ______________#
 
             # upscaling block 1
-            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 32, 64], act=lrelu1, strides=[1, 1, 1, 1, 1],
+            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size*2], act=lrelu1,
+                            strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init, name='conv1-ub/1')
             arguments = {'img_width': img_width, 'img_height': img_height, 'img_depth': img_depth, 'stepsToEnd': 2,
-                         'n_out_channel': 8}
+                         'n_out_channel': int((feature_size*2)/8)}
             x = LambdaLayer(x, fn=subPixelConv3d, fn_args=arguments, name='SubPixel1')
 
             # upscaling block 2
             if upscaling_factor == args.upsampling_factor:
-                x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 8, 64], act=lrelu1, strides=[1, 1, 1, 1, 1],
+                x = Conv3dLayer(x, shape=[kernel, kernel, kernel, int((feature_size*2)/8), feature_size*2], act=lrelu1,
+                                strides=[1, 1, 1, 1, 1],
                                 padding='SAME', W_init=w_init, name='conv1-ub/2')
                 arguments = {'img_width': img_width, 'img_height': img_height, 'img_depth': img_depth, 'stepsToEnd': 1,
-                             'n_out_channel': 8}
+                             'n_out_channel': int((feature_size*2)/8)}
                 x = LambdaLayer(x, fn=subPixelConv3d, fn_args=arguments, name='SubPixel2')
 
-            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 8, 1], strides=[1, 1, 1, 1, 1],
-                            act=tf.nn.tanh, padding='SAME', W_init=w_init, name='convlast')
+            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, int((feature_size*2)/8), 1], strides=[1, 1, 1, 1, 1],
+                            padding='SAME', W_init=w_init, name='convlast')
 
         return x
 

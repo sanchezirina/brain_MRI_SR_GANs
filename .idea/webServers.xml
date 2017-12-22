@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="ad699825-7405-490a-a128-6133ab2e36e1" name="GPI" url="http://imatge.upc.edu">
+        <fileTransfer host="imatge.upc.edu" port="2222" rootFolder="/imatge/isanchez" accessType="SFTP">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" />
+          </advancedOptions>
+          <option name="port" value="2222" />
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
