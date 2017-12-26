@@ -10,12 +10,13 @@ import nibabel as nib
 import os
 from skimage.measure import compare_ssim as ssim
 from skimage.measure import compare_psnr as psnr
+from keras.layers.convolutional import UpSampling3D
 
 import argparse
 
-DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds2-gdl-lrdecay'
-DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds2-gdl-lrdecay/model'
-DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds2-gdl-lrdecay'
+DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/EDSR/ds2-gdl-nb6-32-convNN'
+DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/EDSR/ds2-gdl-nb6-32-convNN'
+DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/EDSR/ds2-gdl-nb6-32-convNN'
 
 
 def lrelu1(x):
@@ -77,7 +78,8 @@ def discriminator(input_disc, kernel, reuse, is_train=True):
 
 
 # img_widht, img_height, img_depth = [224,224,152]
-def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_height, img_depth, feature_size, is_train=True):
+def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_height, img_depth, feature_size,
+              subpixel_NN, nn, is_train=True, scaling_factor=0.1):
     w_init = tf.random_normal_initializer(stddev=0.02)
 
     # initialize weights for smaller convolution kernels (scaled down by the stride, this is what they refer
@@ -97,7 +99,6 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_hei
         x = InputLayer(input_gen, name='in')
         x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 1, feature_size], strides=[1, 1, 1, 1, 1],
                         padding='SAME', W_init=w_init, name='conv1')
-        x = BatchNormLayer(x, act=lrelu1, is_train=is_train, name='BN-conv1')
         inputRB = x
         inputadd = x
 
@@ -105,23 +106,21 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_hei
         for i in range(nb):
             x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size], strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init, name='conv1-rb/%s' % i)
-            x = BatchNormLayer(x, act=lrelu1, is_train=is_train, name='BN1-rb/%s' % i)
             x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size], strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init, name='conv2-rb/%s' % i)
-            x = BatchNormLayer(x, is_train=is_train, name='BN2-rb/%s' % i, )
             # short skip connection
+            x = LambdaLayer(x, lambda x: x * scaling_factor, name='conv2-scale/%s' % i)
             x = ElementwiseLayer([x, inputadd], tf.add, name='add-rb/%s' % i)
             inputadd = x
 
         # large skip connection
         x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size], strides=[1, 1, 1, 1, 1],
                         padding='SAME', W_init=w_init, name='conv2')
-        x = BatchNormLayer(x, is_train=is_train, name='BN-conv2')
         x = ElementwiseLayer([x, inputRB], tf.add, name='add-conv2')
 
         # at that point, x=[batchsize,32,32,23,32]
 
-        if args.subpixel_NN:
+        if subpixel_NN:
             # # ____________SUBPIXEL-NN ______________#
 
             # upscaling block 1
@@ -144,6 +143,31 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_hei
             x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 64, 1], strides=[1, 1, 1, 1, 1],
                             padding='SAME', W_init=w_init, name='convlast')
 
+        elif nn:
+            # upscaling block 1
+            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, feature_size * 2], act=lrelu1,
+                            strides=[1, 1, 1, 1, 1],
+                            padding='SAME', W_init=w_init, name='conv1-ub/1')
+            x = UpSampling3D(name='UpSampling3D_1')(x.outputs)
+            x = Conv3dLayer(InputLayer(x, name='in ub1 conv2'),
+                            shape=[kernel, kernel, kernel, feature_size * 2, feature_size * 2],
+                            act=lrelu1,
+                            strides=[1, 1, 1, 1, 1],
+                            padding='SAME', W_init=w_init, name='conv2-ub/1')
+
+            # upscaling block 2
+            if upscaling_factor == 4:
+                x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size * 2, feature_size * 2], act=lrelu1,
+                                strides=[1, 1, 1, 1, 1],
+                                padding='SAME', W_init=w_init, name='conv1-ub/2')
+                x = UpSampling3D(name='UpSampling3D_1')(x.outputs)
+                x = Conv3dLayer(InputLayer(x, name='in ub2 conv2'), shape=[kernel, kernel, kernel, feature_size * 2,
+                                                                           feature_size * 2], act=lrelu1,
+                                strides=[1, 1, 1, 1, 1],
+                                padding='SAME', W_init=w_init, name='conv2-ub/2')
+
+            x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size * 2, 1], strides=[1, 1, 1, 1, 1],
+                            act=tf.nn.tanh, padding='SAME', W_init=w_init, name='convlast')
         else:
             # # ____________SUBPIXEL - BASELINE ______________#
 
@@ -156,7 +180,7 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_hei
             x = LambdaLayer(x, fn=subPixelConv3d, fn_args=arguments, name='SubPixel1')
 
             # upscaling block 2
-            if upscaling_factor == args.upsampling_factor:
+            if upscaling_factor == 4:
                 x = Conv3dLayer(x, shape=[kernel, kernel, kernel, int((feature_size*2)/8), feature_size*2], act=lrelu1,
                                 strides=[1, 1, 1, 1, 1],
                                 padding='SAME', W_init=w_init, name='conv1-ub/2')
@@ -170,7 +194,8 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, img_width, img_hei
         return x
 
 
-def train(upscaling_factor, img_width, img_height, img_depth, batch_size=1, div_patches=4, epochs=10):
+def train(upscaling_factor, feature_size, residual_blocks, img_width, img_height, img_depth, subpixel_NN, nn,
+          path_prediction, checkpoint_dir, batch_size=1, div_patches=4, epochs=10):
     traindataset = Train_dataset(batch_size)
     iterations_train = math.ceil((len(traindataset.subject_list) * 0.8) / batch_size)
     num_patches = traindataset.num_patches
@@ -185,16 +210,18 @@ def train(upscaling_factor, img_width, img_height, img_depth, batch_size=1, div_
                                               img_width, img_height, img_depth, 1],
                                   name='t_image_input_mask')
 
-    net_gen = generator(input_gen=t_input_gen, kernel=3, nb=args.residual_blocks,
-                        upscaling_factor=args.upsampling_factor, img_height=img_height, img_width=img_width,
-                        img_depth=img_depth, is_train=True, reuse=False)
+    net_gen = generator(input_gen=t_input_gen, kernel=3, nb=residual_blocks,img_height=img_height,
+                        img_width=img_width, img_depth=img_depth, subpixel_NN=subpixel_NN, nn=nn,
+                        upscaling_factor=upscaling_factor,
+                        feature_size=feature_size, is_train=True, reuse=False)
     net_d, disc_out_real = discriminator(input_disc=t_target_image, kernel=3, is_train=True, reuse=False)
     _, disc_out_fake = discriminator(input_disc=net_gen.outputs, kernel=3, is_train=True, reuse=True)
 
     # test
-    gen_test = generator(t_input_gen, kernel=3, nb=args.residual_blocks,
-                         upscaling_factor=args.upsampling_factor, img_height=img_height, img_width=img_width,
-                         img_depth=img_depth, is_train=False, reuse=True)
+    gen_test = generator(t_input_gen, kernel=3, nb=residual_blocks, upscaling_factor=upscaling_factor,
+                         img_height=img_height, img_width=img_width, img_depth=img_depth, subpixel_NN=subpixel_NN,
+                         nn=nn,
+                         feature_size=feature_size, is_train=False, reuse=True)
 
     # ###========================== DEFINE TRAIN OPS ==========================###
 
@@ -307,14 +334,15 @@ def train(upscaling_factor, img_width, img_height, img_depth, batch_size=1, div_
                             x_true_img = ((x_true_img + 1) * normfactor)  # denormalize
                         img_pred = nib.Nifti1Image(x_true_img, np.eye(4))
                         img_pred.to_filename(
-                            os.path.join(args.path_prediction, str(j) + str(i) + 'true.nii.gz'))
+                            os.path.join(
+                                path_prediction, str(j) + str(i) + 'true.nii.gz'))
 
                         x_gen_img = xgenin[0]
                         if normfactor != 0:
                             x_gen_img = ((x_gen_img + 1) * normfactor)  # denormalize
                         img_pred = nib.Nifti1Image(x_gen_img, np.eye(4))
                         img_pred.to_filename(
-                            os.path.join(args.path_prediction, str(j) + str(i) + 'gen.nii.gz'))
+                            os.path.join(path_prediction, str(j) + str(i) + 'gen.nii.gz'))
 
                     x_pred = session.run(gen_test.outputs, {t_input_gen: xgenin})
                     x_pred_img = x_pred[0]
@@ -322,15 +350,15 @@ def train(upscaling_factor, img_width, img_height, img_depth, batch_size=1, div_
                         x_pred_img = ((x_pred_img + 1) * normfactor)  # denormalize
                     img_pred = nib.Nifti1Image(x_pred_img, np.eye(4))
                     img_pred.to_filename(
-                        os.path.join(args.path_prediction, str(j) + str(i) + '.nii.gz'))
+                        os.path.join(path_prediction, str(j) + str(i) + '.nii.gz'))
 
                     saver = tf.train.Saver()
-                    saver.save(sess=session, save_path=args.checkpoint_dir, global_step=step)
+                    saver.save(sess=session, save_path=checkpoint_dir, global_step=step)
                     print("Saved step: [%2d]" % step)
                     step = step + 1
 
 
-def evaluate(img_width, img_height, img_depth, upsampling_factor):
+def evaluate(upsampling_factor, residual_blocks, feature_size, checkpoint_dir_restore, path_volumes):
 
     # dataset & variables
     traindataset = Train_dataset(1)
@@ -345,22 +373,20 @@ def evaluate(img_width, img_height, img_depth, upsampling_factor):
     batch_size = 1
     div_patches = 4
     num_patches = traindataset.num_patches
-    img_width = img_width  # 224
-    img_height = img_height  # 224
-    img_depth = img_depth  # 152
 
     # define model
     t_input_gen = tf.placeholder('float32', [1, None, None, None, 1],
                                  name='t_image_input_to_SRGAN_generator')
-    srgan_network = generator(t_input_gen, kernel=3, nb=6, upscaling_factor=upsampling_factor, is_train=False,
-                              reuse=False,
-                              img_width=img_width, img_height=img_height, img_depth=img_depth)
+    srgan_network = generator(input_gen=t_input_gen, kernel=3, nb=residual_blocks,
+                              upscaling_factor=upsampling_factor, feature_size=feature_size,
+                              is_train=False, reuse=False)
+
 
     # restore g
     sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False))
 
     saver = tf.train.Saver(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="SRGAN_g"))
-    saver.restore(sess, tf.train.latest_checkpoint('/work/isanchez/g/ds4-gdl-lrdecay/subpixel'))
+    saver.restore(sess, tf.train.latest_checkpoint(checkpoint_dir_restore))
 
     for i in range(0, iterations):
         # extract volumes
@@ -404,10 +430,10 @@ def evaluate(img_width, img_height, img_depth, upsampling_factor):
         print(val_psnr)
         print(val_ssim)
         # save volumes
-        filename_gen = os.path.join(args.path_volumes, str(i) + 'gen.nii.gz')
+        filename_gen = os.path.join(path_volumes, str(i) + 'gen.nii.gz')
         img_volume_gen = nib.Nifti1Image(volume_generated, np.eye(4))
         img_volume_gen.to_filename(filename_gen)
-        filename_real = os.path.join(args.path_volumes, str(i) + 'real.nii.gz')
+        filename_real = os.path.join(path_volumes, str(i) + 'real.nii.gz')
         img_volume_real = nib.Nifti1Image(volume_real, np.eye(4))
         img_volume_real.to_filename(filename_real)
 
@@ -421,6 +447,7 @@ def evaluate(img_width, img_height, img_depth, upsampling_factor):
     print('{}{}'.format('Min SSIM: ', array_ssim.min()))
 
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Predict script')
     parser.add_argument('-path_prediction', default=DEFAULT_SAVE_PATH_PREDICTIONS,
@@ -430,12 +457,16 @@ if __name__ == '__main__':
     parser.add_argument('-residual_blocks', default=6, help='Number of residual blocks')
     parser.add_argument('-upsampling_factor', default=4, help='Upsampling factor')
     parser.add_argument('-evaluate', default=False, help='Number of residual blocks')
-    parser.add_argument('-subpixel_NN', default=True, help='Use subpixel nearest neighbour')
+    parser.add_argument('-subpixel_NN', default=False, help='Use subpixel nearest neighbour')
+    parser.add_argument('-nn', default=True, help='Use Upsampling3D + nearest neighbour')
     parser.add_argument('-feature_size', default=32, help='Number of filters')
 
     args = parser.parse_args()
 
     if args.evaluate:
-        evaluate(upsampling_factor=args.upsampling_factor)
+        evaluate(upsampling_factor=4)
     else:
-        train(upscaling_factor=args.upsampling_factor, img_width=128, img_height=128, img_depth=92, batch_size=1)
+        train(upscaling_factor=int(args.upsampling_factor), feature_size=int(args.feature_size),
+              subpixel_NN=args.subpixel_NN, nn=args.nn, residual_blocks=int(args.residual_blocks),
+              path_prediction=args.path_prediction, checkpoint_dir=args.checkpoint_dir, img_width=128,
+              img_height=128, img_depth=92, batch_size=1)

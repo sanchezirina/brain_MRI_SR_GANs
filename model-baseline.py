@@ -13,9 +13,10 @@ from skimage.measure import compare_psnr as psnr
 from keras.layers.convolutional import UpSampling3D
 import argparse
 
-DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds4-gdl-lrdecay'
-DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds4-gdl-lrdecay/model'
-DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds4-gdl-lrdecay'
+DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds2-gdl-lrdecay'
+DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds2-gdl-lrdecay/model'
+DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/ds2-gdl-lrdecay'
+DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds2-gdl-lrdecay'
 
 def lrelu1(x):
     return tf.maximum(x, 0.25 * x)
@@ -136,7 +137,8 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, feature_size, is_t
         return x
 
 
-def train(upscaling_factor, img_width, img_height, img_depth, batch_size=1, div_patches=4, epochs=10):
+def train(upscaling_factor, residual_blocks, feature_size, path_prediction, checkpoint_dir, img_width, img_height,
+          img_depth, batch_size=1, div_patches=4, epochs=10):
     traindataset = Train_dataset(batch_size)
     iterations_train = math.ceil((len(traindataset.subject_list) * 0.8) / batch_size)
     num_patches = traindataset.num_patches
@@ -152,14 +154,14 @@ def train(upscaling_factor, img_width, img_height, img_depth, batch_size=1, div_
                                               img_width, img_height, img_depth, 1],
                                   name='t_image_input_mask')
 
-    net_gen = generator(input_gen=t_input_gen, kernel=3, nb=args.residual_blocks, upscaling_factor=upscaling_factor,
-                        is_train=True, reuse=False)
+    net_gen = generator(input_gen=t_input_gen, kernel=3, nb=residual_blocks, upscaling_factor=upscaling_factor,
+                        feature_size=feature_size, is_train=True, reuse=False)
     net_d, disc_out_real = discriminator(input_disc=t_target_image, kernel=3, is_train=True, reuse=False)
     _, disc_out_fake = discriminator(input_disc=net_gen.outputs, kernel=3, is_train=True, reuse=True)
 
     # test
-    gen_test = generator(t_input_gen, kernel=3, nb=args.residual_blocks, upscaling_factor=upscaling_factor,
-                         is_train=False, reuse=True)
+    gen_test = generator(t_input_gen, kernel=3, nb=residual_blocks, upscaling_factor=upscaling_factor,
+                         feature_size=feature_size, is_train=False, reuse=True)
 
     # ###========================== DEFINE TRAIN OPS ==========================###
 
@@ -269,14 +271,14 @@ def train(upscaling_factor, img_width, img_height, img_depth, batch_size=1, div_
                             x_true_img = ((x_true_img + 1) * normfactor)  # denormalize
                         img_pred = nib.Nifti1Image(x_true_img, np.eye(4))
                         img_pred.to_filename(
-                            os.path.join(args.path_prediction, str(j) + str(i) + 'true.nii.gz'))
+                            os.path.join(path_prediction, str(j) + str(i) + 'true.nii.gz'))
 
                         x_gen_img = xgenin[0]
                         if normfactor != 0:
                             x_gen_img = ((x_gen_img + 1) * normfactor)  # denormalize
                         img_pred = nib.Nifti1Image(x_gen_img, np.eye(4))
                         img_pred.to_filename(
-                            os.path.join(args.path_prediction, str(j) + str(i) + 'gen.nii.gz'))
+                            os.path.join(path_prediction, str(j) + str(i) + 'gen.nii.gz'))
 
                     x_pred = session.run(gen_test.outputs, {t_input_gen: xgenin})
                     x_pred_img = x_pred[0]
@@ -284,15 +286,15 @@ def train(upscaling_factor, img_width, img_height, img_depth, batch_size=1, div_
                         x_pred_img = ((x_pred_img + 1) * normfactor)  # denormalize
                     img_pred = nib.Nifti1Image(x_pred_img, np.eye(4))
                     img_pred.to_filename(
-                        os.path.join(args.path_prediction, str(j) + str(i) + '.nii.gz'))
+                        os.path.join(path_prediction, str(j) + str(i) + '.nii.gz'))
 
                     saver = tf.train.Saver()
-                    saver.save(sess=session, save_path=args.checkpoint_dir, global_step=step)
+                    saver.save(sess=session, save_path=checkpoint_dir, global_step=step)
                     print("Saved step: [%2d]" % step)
                     step = step + 1
 
 
-def evaluate(upsampling_factor):
+def evaluate(upsampling_factor, residual_blocks, feature_size, checkpoint_dir_restore, path_volumes):
 
     # dataset & variables
     traindataset = Train_dataset(1)
@@ -311,14 +313,16 @@ def evaluate(upsampling_factor):
     # define model
     t_input_gen = tf.placeholder('float32', [1, None, None, None, 1],
                                  name='t_image_input_to_SRGAN_generator')
-    srgan_network = generator(t_input_gen, kernel=3, nb=6, upscaling_factor=upsampling_factor, is_train=False,
-                              reuse=False)
+    srgan_network = generator(input_gen=t_input_gen, kernel=3, nb=residual_blocks,
+                              upscaling_factor=upsampling_factor, feature_size=feature_size,
+                              is_train=False, reuse=False)
+
 
     # restore g
     sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False))
 
     saver = tf.train.Saver(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="SRGAN_g"))
-    saver.restore(sess, tf.train.latest_checkpoint('/work/isanchez/g/ds4-gdl-lrdecay'))
+    saver.restore(sess, tf.train.latest_checkpoint(checkpoint_dir_restore))
 
     for i in range(0, iterations):
         # extract volumes
@@ -362,10 +366,10 @@ def evaluate(upsampling_factor):
         print(val_psnr)
         print(val_ssim)
         # save volumes
-        filename_gen = os.path.join(args.path_volumes, str(i) + 'gen.nii.gz')
+        filename_gen = os.path.join(path_volumes, str(i) + 'gen.nii.gz')
         img_volume_gen = nib.Nifti1Image(volume_generated, np.eye(4))
         img_volume_gen.to_filename(filename_gen)
-        filename_real = os.path.join(args.path_volumes, str(i) + 'real.nii.gz')
+        filename_real = os.path.join(path_volumes, str(i) + 'real.nii.gz')
         img_volume_real = nib.Nifti1Image(volume_real, np.eye(4))
         img_volume_real.to_filename(filename_real)
 
@@ -384,15 +388,23 @@ if __name__ == '__main__':
     parser.add_argument('-path_prediction', default=DEFAULT_SAVE_PATH_PREDICTIONS, help='Path to save training predictions')
     parser.add_argument('-path_volumes', default=DEFAULT_SAVE_PATH_VOLUMES, help='Path to save test volumes')
     parser.add_argument('-checkpoint_dir', default=DEFAULT_SAVE_PATH_CHECKPOINTS, help='Path to save checkpoints')
+    parser.add_argument('-checkpoint_dir_restore', default=DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS, help='Path to restore checkpoints')
     parser.add_argument('-residual_blocks', default=6, help='Number of residual blocks')
     parser.add_argument('-upsampling_factor', default=4, help='Upsampling factor')
     parser.add_argument('-evaluate', default=False, help='Number of residual blocks')
+    parser.add_argument('-feature_size', default=32, help='Number of filters')
 
     args = parser.parse_args()
 
     if args.evaluate:
-        evaluate(upsampling_factor=args.upsampling_factor)
+        print('Evaluate')
+        evaluate(upsampling_factor=int(args.upsampling_factor), feature_size=int(args.feature_size),
+                 residual_blocks=int(args.residual_blocks), checkpoint_dir_restore=args.checkpoint_dir_restore,
+                 path_volumes=args.path_volumes)
     else:
-        train(upscaling_factor=args.upsampling_factor, img_width=128, img_height=128, img_depth=92, batch_size=1)
+        print('Train')
+        train(upscaling_factor=int(args.upsampling_factor), residual_blocks=int(args.residual_blocks),
+              feature_size=int(args.feature_size), path_prediction=args.path_prediction,
+              checkpoint_dir=args.checkpoint_dir, img_width=128, img_height=128, img_depth=92, batch_size=1)
 
     # img_width/height/depth = final size [224,224,152]
