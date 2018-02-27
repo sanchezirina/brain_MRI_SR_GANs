@@ -14,15 +14,14 @@ from keras.layers.convolutional import UpSampling3D
 
 import argparse
 
-DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/EDSR/ds2-mse-gdl-nb6-32-subpixel'
-DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/EDSR/ds2-mse-gdl-nb6-32-subpixel/model'
-DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/EDSR/ds2-mse-gdl-nb6-32-convnn'
-DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/EDSR/ds2-mse-gdl-nb6-32-convnn'
+DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/EDSR/ds2-mse-gdl-nb12-64-convnn'
+DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/EDSR/ds2-mse-gdl-nb12-64-convnn/model'
+DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/EDSR/ds2-mse-gdl-nb6-64-subpixelnn'
+DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/EDSR/ds2-mse-gdl-nb6-64-subpixelnn'
 
 
 def lrelu1(x):
     return tf.maximum(x, 0.25 * x)
-
 
 def lrelu2(x):
     return tf.maximum(x, 0.3 * x)
