@@ -148,9 +148,12 @@ if __name__ == '__main__':
     cont_AD = 0
     cont_MCI = 0
     cont_NC = 0
+    subject_list = os.listdir(data_path)
+    print(subject_list)
     with open(os.path.join(data_path, 'ADNI_SCREENING_CLINICAL_FILE_08_02_17.csv')) as csvfile:
         spamreader = csv.reader(csvfile, delimiter=',')
         for row in spamreader:
+            print(row)
             type = row[4]
             print(type)
             if type == 'AD':

@@ -4,14 +4,15 @@ import math
 import os
 from skimage.util import view_as_windows
 import csv
+from scipy.ndimage.filters import gaussian_filter
 
 
 class Train_dataset(object):
     def __init__(self, batch_size, overlapping=1):
+
         self.batch_size = batch_size
         self.data_path = '/imatge/isanchez/projects/neuro/ADNI-Screening-1.5T'
-        self.subject_list = os.listdir(self.data_path)
-        self.subject_list = np.delete(self.subject_list, 120)
+        self.subject_list = []
         self.heigth_patch = 112  # 128
         self.width_patch = 112  # 128
         self.depth_patch = 76  # 92
@@ -20,6 +21,12 @@ class Train_dataset(object):
         self.num_patches = (math.ceil((224 / (self.heigth_patch)) / (self.overlapping))) * (
             math.ceil((224 / (self.width_patch)) / (self.overlapping))) * (
                                math.ceil((152 / (self.depth_patch)) / (self.overlapping)))
+        with open(os.path.join(data_path, 'ADNI_SCREENING_CLINICAL_FILE_08_02_17.csv')) as csvfile:
+            spamreader = csv.reader(csvfile, delimiter=',')
+            for row in spamreader:
+                if row[4] != 'AD':
+                    self.subject_list.append(row[0])
+        self.subject_list = np.delete(self.subject_list, 0)
 
     def mask(self, iteration):
         subject_batch = self.subject_list[iteration * self.batch_size:self.batch_size + (iteration * self.batch_size)]
@@ -104,7 +111,6 @@ class Train_dataset(object):
         subjects = np.empty([self.batch_size, 224, 224, 152])
         i = 0
         for subject in subject_batch:
-            if subject != 'ADNI_SCREENING_CLINICAL_FILE_08_02_17.csv':
                 filename = os.path.join(self.data_path, subject)
                 filename = os.path.join(filename, 'T1_brain_extractedBrainExtractionBrain.nii.gz')
                 proxy = nib.load(filename)
@@ -142,27 +148,15 @@ class Train_dataset(object):
 
 if __name__ == '__main__':
     data_path = '/imatge/isanchez/projects/neuro/ADNI-Screening-1.5T'
-    #subject_list = os.listdir(data_path)
-    #index = subject_list.index('ADNI_SCREENING_CLINICAL_FILE_08_02_17.csv')
-    #print(subject_list[index])
-    cont_AD = 0
-    cont_MCI = 0
-    cont_NC = 0
-    with open(os.path.join(data_path, 'ADNI_SCREENING_CLINICAL_FILE_08_02_17.csv')) as csvfile:
-        spamreader = csv.reader(csvfile, delimiter=',')
-        for row in spamreader:
-            type = row[4]
-            print(type)
-            if type == 'AD':
-                cont_AD += 1
-                print('contAD')
-            elif type == 'MCI':
-                cont_MCI += 1
-                print('contMCI')
-            else:
-                cont_NC += 1
-                print('contNC')
-    print('Number of AD: %2d' % cont_AD)
-    print('Number of MCI: %2d' % cont_MCI)
-    print('Number of NC: %2d' % cont_NC)
-    print(cont_AD + cont_MCI + cont_NC)
+    DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/'
+    dataset = Train_dataset(batch_size=1)
+    print(dataset.subject_list)
+    print(len(dataset.subject_list))
+    patches = dataset.patches_true(iteration=0)
+    for index, patch in enumerate(patches):
+        filename_true = os.path.join(DEFAULT_SAVE_PATH_VOLUMES, str(index) + 'true.nii.gz')
+        img_patch_true = nib.Nifti1Image(patch, np.eye(4))
+        img_patch_true.to_filename(filename_true)
+        filename_gaus = os.path.join(DEFAULT_SAVE_PATH_VOLUMES, str(index) + 'gaus.nii.gz')
+        img_patch_gaus = nib.Nifti1Image(gaussian_filter(patch, sigma=1), np.eye(4))
+        img_patch_gaus.to_filename(filename_gaus)
