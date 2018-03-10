@@ -2,20 +2,22 @@ import tensorflow as tf
 import numpy as np
 import math
 from datasetnoAD import Train_dataset
+import nibabel as nib
+import os
+batch_size = 1
+num_patches = 8
+div_patches = 1
 
+
+DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/autoencoder'
+DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/autoencoder/step'
 
 def lrelu(x):
     return tf.maximum(x, 0.3 * x)
 
 
-batch_size = 1
-num_patches = 8
-div_patches = 4
 
-
-# %%
-def autoencoder(input_shape=[int((batch_size * num_patches) / div_patches), 128, 128, 92, 1],
-                n_filters=[1, 10, 10, 10], filter_sizes=[3, 3, 3, 3]):
+def autoencoder(input_shape=[None, 128, 128, 92, 1], n_filters=[1, 10, 10, 10], filter_sizes=[3, 3, 3, 3]):
     """Build a deep denoising autoencoder w/ tied weights.
     Parameters
     ----------
@@ -57,13 +59,14 @@ def autoencoder(input_shape=[int((batch_size * num_patches) / div_patches), 128,
             tf.random_uniform([
                 filter_sizes[layer_i],
                 filter_sizes[layer_i],
+                filter_sizes[layer_i],
                 n_input, n_output],
                 -1.0 / math.sqrt(n_input),
                 1.0 / math.sqrt(n_input)))
         b = tf.Variable(tf.zeros([n_output]))
         encoder.append(W)
         output = lrelu(
-            tf.add(tf.nn.conv2d(
+            tf.add(tf.nn.conv3d(
                 current_input, W, strides=[1, 2, 2, 2, 1], padding='SAME'), b))
         current_input = output
 
@@ -77,9 +80,9 @@ def autoencoder(input_shape=[int((batch_size * num_patches) / div_patches), 128,
     # Build the decoder using the same weights
     for layer_i, shape in enumerate(shapes):
         W = encoder[layer_i]
-        b = tf.Variable(tf.zeros([W.get_shape().as_list()[2]]))
+        b = tf.Variable(tf.zeros([W.get_shape().as_list()[3]]))
         output = lrelu(tf.add(
-            tf.nn.conv2d_transpose(
+            tf.nn.conv3d_transpose(
                 current_input, W,
                 tf.stack([tf.shape(x)[0], shape[1], shape[2], shape[3], shape[4]]),
                 strides=[1, 2, 2, 2, 1], padding='SAME'), b))
@@ -97,51 +100,68 @@ def autoencoder(input_shape=[int((batch_size * num_patches) / div_patches), 128,
 
 # %%
 def train():
+    traindataset = Train_dataset(batch_size=1)
+    batch_size = 1
+    num_patches = 8
+    div_patches = 1
+    iterations_train = int(math.ceil((len(traindataset.subject_list) * 1) / batch_size)) #entreno con todo
+    n_epochs = 100
 
 
-    iterations_train = math.ceil((len(traindataset.subject_list) * 0.8) / batch_size)
     # %%
-    learning_rate = 0.01
-    optimizer = tf.train.AdamOptimizer(learning_rate).minimize(ae['cost'])
+    ae = autoencoder()
+    learning_rate = 0.001
+    # global_step = tf.Variable(0, trainable=False)
+    # lr_v = tf.Variable(0.01, trainable=False)
+    # decay_rate = 0.5
+    # decay_steps = 1875  # every 3 epochs
+    # learning_rate = tf.train.inverse_time_decay(lr_v, global_step=global_step, decay_rate=decay_rate,
+    #                                             decay_steps=decay_steps)
+    # optimizer = tf.train.AdamOptimizer(learning_rate).minimize(ae['cost'])
+    optimizer = tf.train.RMSPropOptimizer(learning_rate=learning_rate).minimize(ae['cost'])
 
     # %%
     # We create a session to use the graph
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
 
+
+
     # %%
     # Fit all training data
-    batch_size = 100
-    n_epochs = 10
+
+    step = 0
     for epoch_i in range(n_epochs):
-        for batch_i in range(mnist.train.num_examples // batch_size):
-            batch_xs, _ = mnist.train.next_batch(batch_size)
-            train = np.array([img - mean_img for img in batch_xs])
-            sess.run(optimizer, feed_dict={ae['x']: train})
-        print(epoch_i, sess.run(ae['cost'], feed_dict={ae['x']: train}))
+        for i in range(0, iterations_train):
+            ###====================== LOAD DATA ===========================###
+            xt_total = traindataset.patches_true(i)
+            for k in range(0, div_patches):
+                xt = xt_total[k * int((batch_size * num_patches) / div_patches):(int(
+                    (batch_size * num_patches) / div_patches) * k) + int(
+                    (batch_size * num_patches) / div_patches)]
+                # NORMALIZING
+                for t in range(0, xt.shape[0]):
+                    normfactor = (np.amax(xt[t])) / 2
+                    if normfactor != 0:
+                        xt[t] = ((xt[t] - normfactor) / normfactor)
+                sess.run(optimizer, feed_dict={ae['x']: xt})
+            print(epoch_i, i, sess.run(ae['cost'], feed_dict={ae['x']: xt}))
+        if iterations_train % 20:
+            y = sess.run(ae['y'], feed_dict={ae['x']: xt})
+            if normfactor != 0:
+                y_pred_img = ((y[2] + 1) * normfactor)
+            img_pred = nib.Nifti1Image(y_pred_img, np.eye(4))
+            img_pred.to_filename(os.path.join(DEFAULT_SAVE_PATH_PREDICTIONS, str(epoch_i) + str(i) + 'pred.nii.gz'))
+            img = nib.Nifti1Image(((xt[2] + 1) * normfactor), np.eye(4))
+            img.to_filename(os.path.join(DEFAULT_SAVE_PATH_PREDICTIONS, str(epoch_i) + str(i) + 'real.nii.gz'))
 
-
-
-    # %%
-    # Plot example reconstructions
-    n_examples = 10
-    test_xs, _ = mnist.test.next_batch(n_examples)
-    test_xs_norm = np.array([img - mean_img for img in test_xs])
-    recon = sess.run(ae['y'], feed_dict={ae['x']: test_xs_norm})
-    print(recon.shape)
-    fig, axs = plt.subplots(2, n_examples, figsize=(10, 2))
-    for example_i in range(n_examples):
-        axs[0][example_i].imshow(
-            np.reshape(test_xs[example_i, :], (28, 28)))
-        axs[1][example_i].imshow(
-            np.reshape(
-                np.reshape(recon[example_i, ...], (784,)) + mean_img,
-                (28, 28)))
-    fig.show()
-    plt.draw()
-    plt.waitforbuttonpress()
+        if epoch_i + 1 % 20:
+            saver = tf.train.Saver()
+            saver.save(sess=sess, save_path=DEFAULT_SAVE_PATH_CHECKPOINTS, global_step=step)
+            print("Saved step: [%2d]" % step)
+            step = step + 1
 
 
 # %%
 if __name__ == '__main__':
-    test_mnist()
+    train()
