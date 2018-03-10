@@ -21,7 +21,7 @@ class Train_dataset(object):
         self.num_patches = (math.ceil((224 / (self.heigth_patch)) / (self.overlapping))) * (
             math.ceil((224 / (self.width_patch)) / (self.overlapping))) * (
                                math.ceil((152 / (self.depth_patch)) / (self.overlapping)))
-        with open(os.path.join(data_path, 'ADNI_SCREENING_CLINICAL_FILE_08_02_17.csv')) as csvfile:
+        with open(os.path.join(self.data_path, 'ADNI_SCREENING_CLINICAL_FILE_08_02_17.csv')) as csvfile:
             spamreader = csv.reader(csvfile, delimiter=',')
             for row in spamreader:
                 if row[4] != 'AD':
