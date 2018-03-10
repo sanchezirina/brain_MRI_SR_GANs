@@ -4,20 +4,20 @@ import math
 from datasetnoAD import Train_dataset
 import nibabel as nib
 import os
+
 batch_size = 1
 num_patches = 8
 div_patches = 1
 
+DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/autoencoder/RMSProp2'
+DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/autoencoder/RMSprop2/step'
 
-DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/autoencoder'
-DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/autoencoder/step'
 
 def lrelu(x):
     return tf.maximum(x, 0.3 * x)
 
 
-
-def autoencoder(input_shape=[None, 128, 128, 92, 1], n_filters=[1, 10, 10, 10], filter_sizes=[3, 3, 3, 3]):
+def autoencoder(input_shape=[None, 128, 128, 92, 1], n_filters=[1, 20, 20, 20], filter_sizes=[3, 3, 3, 3]):
     """Build a deep denoising autoencoder w/ tied weights.
     Parameters
     ----------
@@ -46,7 +46,6 @@ def autoencoder(input_shape=[None, 128, 128, 92, 1], n_filters=[1, 10, 10, 10], 
     # input to the network
     x = tf.placeholder(tf.float32, input_shape, name='x')
     current_input = x
-
 
     # %%
     # Build the encoder
@@ -104,9 +103,8 @@ def train():
     batch_size = 1
     num_patches = 8
     div_patches = 1
-    iterations_train = int(math.ceil((len(traindataset.subject_list) * 1) / batch_size)) #entreno con todo
+    iterations_train = int(math.ceil((len(traindataset.subject_list) * 1) / batch_size))  # entreno con todo
     n_epochs = 100
-
 
     # %%
     ae = autoencoder()
@@ -124,8 +122,6 @@ def train():
     # We create a session to use the graph
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
-
-
 
     # %%
     # Fit all training data

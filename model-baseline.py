@@ -13,10 +13,10 @@ from skimage.measure import compare_psnr as psnr
 from keras.layers.convolutional import UpSampling3D
 import argparse
 
-DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds2-gdl-lrdecay/subpixel'
-DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds2-gdl-lrdecay/subpixel/model'
-DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/ds2-gdl-lrdecay/subpixel'
-DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds2-gdl-lrdecay/subpixel'
+DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds4-gdl-lrdecay/RC-gauss'
+DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds4-gdl-lrdecay/RC-gauss/model'
+DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/ds4-gdl-lrdecay/RC-gauss'
+DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds4-gdl-lrdecay/RC-gauss'
 
 def lrelu1(x):
     return tf.maximum(x, 0.25 * x)
@@ -320,7 +320,7 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
                 # RESIZING, don't normalize, XT already normalized
                 x_generator = zoom(xt, [1, (1 / upscaling_factor), (1 / upscaling_factor),
                                         (1 / upscaling_factor), 1])
-                # XGENIN = gaussian_filter(x_generator,sigma=1)
+                x_generator = gaussian_filter(x_generator, sigma=1)
                 xgenin = x_generator
 
                 ###========================= train SRGAN =========================###
@@ -408,7 +408,7 @@ def evaluate(upsampling_factor, residual_blocks, feature_size, checkpoint_dir_re
         res = 1 / upsampling_factor
         x_generator = x_generator[:, :, :, np.newaxis]
         x_generator = zoom(x_generator, [res, res, res, 1])
-        # x_generator = gaussian_filter(x_generator, sigma=1)
+        x_generator = gaussian_filter(x_generator, sigma=1)
         xg_generated[0] = sess.run(srgan_network.outputs, {t_input_gen: x_generator[np.newaxis, :]})
         xg_generated[0] = ((xg_generated[0] + 1) * normfactor)
         volume_real = xt_total[0]
