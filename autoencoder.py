@@ -9,15 +9,15 @@ batch_size = 1
 num_patches = 8
 div_patches = 1
 
-DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/autoencoder/RMSProp2'
-DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/autoencoder/RMSprop2/step'
+DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/autoencoder/RMSProp3'
+DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/autoencoder/RMSProp3/step'
 
 
 def lrelu(x):
     return tf.maximum(x, 0.3 * x)
 
 
-def autoencoder(input_shape=[None, 128, 128, 92, 1], n_filters=[1, 20, 20, 20], filter_sizes=[3, 3, 3, 3]):
+def autoencoder(input_shape=[None, 128, 128, 92, 1], n_filters=[1, 30, 30, 30], filter_sizes=[3, 3, 3, 3]):
     """Build a deep denoising autoencoder w/ tied weights.
     Parameters
     ----------

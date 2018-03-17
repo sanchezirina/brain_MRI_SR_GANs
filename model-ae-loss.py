@@ -11,12 +11,14 @@ import os
 from skimage.measure import compare_ssim as ssim
 from skimage.measure import compare_psnr as psnr
 from keras.layers.convolutional import UpSampling3D
+from autoencoder import autoencoder
 import argparse
 
-DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds4-gdl-lrdecay/subpixelnn-gauss'
-DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds4-gdl-lrdecay/subpixelnn-gauss/model'
-DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/ds4-gdl-lrdecay/subpixelnn-gauss'
-DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds4-gdl-lrdecay/subpixelnn-gauss'
+DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds4-ae/subpixel-gauss'
+DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds4-ae/subpixel-gauss/model'
+DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/ds4-ae/subpixel-gauss'
+DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds4-ae/subpixel-gauss'
+AUTOENCODER_CHECPOINTS = '/work/isanchez/g/autoencoder/RMSProp3'
 
 def lrelu1(x):
     return tf.maximum(x, 0.25 * x)
@@ -240,6 +242,8 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
     # use disc_out_real in both cases because shape will be equal in disc_out_real and disc_out_fake
     # if not, problems for not specifying input shape for generator
 
+
+
     if np.random.uniform() > 0.1:
         # give correct classifications
         y_gan_real = tf.ones_like(disc_out_real)
@@ -255,27 +259,24 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
                                  name='d_loss_fake')
     d_loss = d_loss_real + d_loss_fake
 
-    mse_loss = tf.reduce_sum(
-        tf.square(net_gen.outputs - t_target_image), axis=[0, 1, 2, 3, 4], name='g_loss_mse')
-
-    dx_real = t_target_image[:, 1:, :, :, :] - t_target_image[:, :-1, :, :, :]
-    dy_real = t_target_image[:, :, 1:, :, :] - t_target_image[:, :, :-1, :, :]
-    dz_real = t_target_image[:, :, :, 1:, :] - t_target_image[:, :, :, :-1, :]
-    dx_fake = net_gen.outputs[:, 1:, :, :, :] - net_gen.outputs[:, :-1, :, :, :]
-    dy_fake = net_gen.outputs[:, :, 1:, :, :] - net_gen.outputs[:, :, :-1, :, :]
-    dz_fake = net_gen.outputs[:, :, :, 1:, :] - net_gen.outputs[:, :, :, :-1, :]
-
-    gd_loss = tf.reduce_sum(tf.square(tf.abs(dx_real) - tf.abs(dx_fake))) + \
-              tf.reduce_sum(tf.square(tf.abs(dy_real) - tf.abs(dy_fake))) + \
-              tf.reduce_sum(tf.square(tf.abs(dz_real) - tf.abs(dz_fake)))
-
     # use disc_out_real in both cases because shape will be equal in disc_out_real and disc_out_fake
     # if not, problems for not specifying input shape for generator
 
     g_gan_loss = 10e-2 * tf.reduce_mean(tf.square(disc_out_fake - smooth_gan_labels(tf.ones_like(disc_out_real))),
                                         name='g_loss_gan')
 
-    g_loss = mse_loss + g_gan_loss + gd_loss
+    saver = tf.train.Saver()
+    sess_ae = tf.Session()
+    saver.restore(sess_ae,tf.train.latest_checkpoint(AUTOENCODER_CHECPOINTS))
+    ae = autoencoder(input_shape=[int((batch_size * num_patches) / div_patches),
+                                                img_width, img_height, img_depth, 1])
+
+    z_real = sess_ae.run(ae['z'],  feed_dict={ae['x']: t_target_image})
+    z_fake = sess_ae.run(ae['z'],  feed_dict={ae['x']: net_gen.outputs})
+    ae_mse_loss = tf.reduce_sum(
+        tf.square(z_fake - z_real), axis=[0, 1, 2, 3, 4], name='ae_loss_mse')
+
+    g_loss = ae_mse_loss + g_gan_loss
 
     g_vars = tl.layers.get_variables_with_name('SRGAN_g', True, True)
     d_vars = tl.layers.get_variables_with_name('SRGAN_d', True, True)
@@ -327,12 +328,12 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
                 # update D
                 errd, _ = session.run([d_loss, d_optim], {t_target_image: xt, t_input_gen: xgenin})
                 # update G
-                errg, errmse, errgan, errgd, _ = session.run([g_loss, mse_loss, g_gan_loss, gd_loss, g_optim],
+                errg, errgan, _ = session.run([g_loss, g_gan_loss, g_optim],
                                                              {t_input_gen: xgenin, t_target_image: xt,
                                                               t_input_mask: xm})
                 print(
-                    "Epoch [%2d/%2d] [%4d/%4d] [%4d/%4d]: d_loss: %.8f g_loss: %.8f (mse: %.6f gdl: %.6f adv: %.6f)" % (
-                        j, epochs, i, iterations_train, k, div_patches - 1, errd, errg, errmse, errgd, errgan))
+                    "Epoch [%2d/%2d] [%4d/%4d] [%4d/%4d]: d_loss: %.8f g_loss: %.8f (mse: %.6f adv: %.6f)" % (
+                        j, epochs, i, iterations_train, k, div_patches - 1, errd, errg, ae_mse_loss, errgan))
 
                 ###========================= evaluate & save model =========================###
 
