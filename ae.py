@@ -17,7 +17,7 @@ div_patches = 1
 
 DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/autoencoder/RMSProp4'
 DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/autoencoder/RMSProp4/step'
-AUTOENCODER_CHECPOINTS = '/work/isanchez/g/autoencoder/RMSProp3'
+AUTOENCODER_CHECPOINTS = '/work/isanchez/g/autoencoder/RMSProp4'
 DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds4-ae/subpixel-gauss'
 
 
@@ -59,23 +59,24 @@ def autoencoder(input_shape=[None, 128, 128, 92, 1], n_filters=[1, 30, 30, 30], 
     # Build the encoder
     encoder = []
     shapes = []
-    for layer_i, n_output in enumerate(n_filters[1:]):
-        n_input = current_input.get_shape().as_list()[4]
-        shapes.append(current_input.get_shape().as_list())
-        W = tf.Variable(
-            tf.random_uniform([
-                filter_sizes[layer_i],
-                filter_sizes[layer_i],
-                filter_sizes[layer_i],
-                n_input, n_output],
-                -1.0 / math.sqrt(n_input),
-                1.0 / math.sqrt(n_input)))
-        b = tf.Variable(tf.zeros([n_output]))
-        encoder.append(W)
-        output = lrelu(
-            tf.add(tf.nn.conv3d(
-                current_input, W, strides=[1, 2, 2, 2, 1], padding='SAME'), b))
-        current_input = output
+    with tf.variable_scope("encoder"):
+        for layer_i, n_output in enumerate(n_filters[1:]):
+            n_input = current_input.get_shape().as_list()[4]
+            shapes.append(current_input.get_shape().as_list())
+            W = tf.Variable(
+                tf.random_uniform([
+                    filter_sizes[layer_i],
+                    filter_sizes[layer_i],
+                    filter_sizes[layer_i],
+                    n_input, n_output],
+                    -1.0 / math.sqrt(n_input),
+                    1.0 / math.sqrt(n_input)), name='W' + str(layer_i))
+            b = tf.Variable(tf.zeros([n_output]), name='b' + str(layer_i))
+            encoder.append(W)
+            output = lrelu(
+                tf.add(tf.nn.conv3d(
+                    current_input, W, strides=[1, 2, 2, 2, 1], padding='SAME', name='conv' + str(layer_i)), b))
+            current_input = output
 
     # %%
     # store the latent representation
@@ -85,21 +86,26 @@ def autoencoder(input_shape=[None, 128, 128, 92, 1], n_filters=[1, 30, 30, 30], 
 
     # %%
     # Build the decoder using the same weights
-    for layer_i, shape in enumerate(shapes):
-        W = encoder[layer_i]
-        b = tf.Variable(tf.zeros([W.get_shape().as_list()[3]]))
-        output = lrelu(tf.add(
-            tf.nn.conv3d_transpose(
-                current_input, W,
-                tf.stack([tf.shape(x)[0], shape[1], shape[2], shape[3], shape[4]]),
-                strides=[1, 2, 2, 2, 1], padding='SAME'), b))
-        current_input = output
+    with tf.variable_scope("decoder"):
+        for layer_i, shape in enumerate(shapes):
+            W_dec = encoder[layer_i]
+            b_dec = tf.Variable(tf.zeros([W_dec.get_shape().as_list()[3]]), name='b' + str(layer_i))
+            output = lrelu(tf.add(
+                tf.nn.conv3d_transpose(
+                    current_input, W_dec,
+                    tf.stack([tf.shape(x)[0], shape[1], shape[2], shape[3], shape[4]]),
+                    strides=[1, 2, 2, 2, 1], padding='SAME', name='conv' + str(layer_i)), b_dec))
+            current_input = output
 
     # %%
     # now have the reconstruction through the network
     y = current_input
     # cost function measures pixel-wise difference
     cost = tf.reduce_sum(tf.square(y - x))
+
+    tf.add_to_collection("x", x)
+    tf.add_to_collection("z",z)
+    tf.add_to_collection("y", y)
 
     # %%
     return {'x': x, 'z': z, 'y': y, 'cost': cost}
@@ -117,13 +123,7 @@ def train():
     # %%
     ae = autoencoder()
     learning_rate = 0.001
-    # global_step = tf.Variable(0, trainable=False)
-    # lr_v = tf.Variable(0.01, trainable=False)
-    # decay_rate = 0.5
-    # decay_steps = 1875  # every 3 epochs
-    # learning_rate = tf.train.inverse_time_decay(lr_v, global_step=global_step, decay_rate=decay_rate,
-    #                                             decay_steps=decay_steps)
-    # optimizer = tf.train.AdamOptimizer(learning_rate).minimize(ae['cost'])
+
     optimizer = tf.train.RMSPropOptimizer(learning_rate=learning_rate).minimize(ae['cost'])
 
     # %%
@@ -150,6 +150,12 @@ def train():
                         xt[t] = ((xt[t] - normfactor) / normfactor)
                 sess.run(optimizer, feed_dict={ae['x']: xt})
             print(epoch_i, i, sess.run(ae['cost'], feed_dict={ae['x']: xt}))
+            if i==0:
+                saver = tf.train.Saver()
+                saver.save(sess=sess, save_path=DEFAULT_SAVE_PATH_CHECKPOINTS, global_step=step)
+                print("Saved step: [%2d]" % step)
+                step = step + 1
+
         if iterations_train % 20:
             y = sess.run(ae['y'], feed_dict={ae['x']: xt})
             if normfactor != 0:
@@ -159,12 +165,7 @@ def train():
             img = nib.Nifti1Image(((xt[2] + 1) * normfactor), np.eye(4))
             img.to_filename(os.path.join(DEFAULT_SAVE_PATH_PREDICTIONS, str(epoch_i) + str(i) + 'real.nii.gz'))
 
-        if epoch_i + 1 % 20:
-            saver = tf.train.Saver()
-            saver.save(sess=sess, save_path=DEFAULT_SAVE_PATH_CHECKPOINTS, global_step=step)
-            print("Saved step: [%2d]" % step)
-            step = step + 1
-
+        #if epoch_i + 1 % 20:
 
 def initialize_uninitialized_vars(sess):
     from itertools import compress
@@ -180,27 +181,31 @@ def eval_ae(xt):
     ae = autoencoder()
 
     session = tf.Session()
-    tf.global_variables_initializer()
-    saver = tf.train.Saver(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES))
+    saver = tf.train.import_meta_graph(AUTOENCODER_CHECPOINTS + '/step-0.meta', clear_devices=True)
     saver.restore(session, tf.train.latest_checkpoint(AUTOENCODER_CHECPOINTS))
-    #saver = tf.train.import_meta_graph(AUTOENCODER_CHECPOINTS + '/step-99.meta', clear_devices=True)
-    #saver.restore(session, tf.train.latest_checkpoint(AUTOENCODER_CHECPOINTS))
 
     initialize_uninitialized_vars(session)
 
-    normfactor = (np.amax(xt)) / 2
-    x_generator = ((xt - normfactor) / normfactor)
-    xg_generated = session.run(ae['y'], {ae['x']: x_generator})
-    z = session.run(ae['z'], {ae['x']: x_generator})
-    y = session.run(ae['y'], {ae['x']: x_generator})
-    x_auto_img = y[0]
-    if normfactor != 0:
-        x_auto_img = ((x_auto_img + 1) * normfactor)  # denormalize
-    img_pred = nib.Nifti1Image(x_auto_img, np.eye(4))
-    img_pred.to_filename(
-        os.path.join('/work/isanchez/predictions/autoencoder/RMSProp4/auto.nii.gz'))
+    #print(tf.global_variables())
+    print(session.run(tf.get_default_graph().get_tensor_by_name('encoder/W0:0')))
+    z=0
+    #z = tf.get_collection('z')[0]
+    #y = tf.get_collection('y')[0]
 
-    return z, xg_generated
+
+    #normfactor = (np.amax(xt)) / 2
+    #x_generator = ((xt - normfactor) / normfactor)
+    #xg_generated = session.run(ae['y'], {ae['x']: x_generator})
+    #z_r = session.run(z, {'x_auto:0': x_generator})
+    # y_r = session.run(y, {ae['x']: x_generator})
+    # x_auto_img = y_r[0]
+    # if normfactor != 0:
+    #     x_auto_img = ((x_auto_img + 1) * normfactor)  # denormalize
+    # img_pred = nib.Nifti1Image(x_auto_img, np.eye(4))
+    # img_pred.to_filename(
+    #     os.path.join('/work/isanchez/predictions/ds4-ae/subpixel-gauss/auto.nii.gz'))
+
+    return z
 
 # %%
 if __name__ == '__main__':

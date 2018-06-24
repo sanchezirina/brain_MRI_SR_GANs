@@ -12,10 +12,11 @@ from skimage.measure import compare_ssim as ssim
 from skimage.measure import compare_psnr as psnr
 from keras.layers.convolutional import UpSampling3D
 import argparse
+from autoencoder import eval_ae
 
-DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds4-ae/rc-gauss'
-DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds4-ae/rc-gauss/model'
-DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/ds4-ae/rc-gauss'
+DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds4-ae/subpixel-gauss'
+DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds4-ae/subpixel-gauss/model'
+DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/ds4-ae/subpixel-gauss'
 DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds4-ae/subpixel-gauss'
 AUTOENCODER_CHECPOINTS = '/work/isanchez/g/autoencoder/RMSProp3'
 
@@ -289,7 +290,7 @@ def autoencoder(x_auto, input_shape=[None, 128, 128, 92, 1], n_filters=[1, 30, 3
     return {'x': x_auto, 'z': z, 'y': y, 'cost': cost}
 
 def train(upscaling_factor, residual_blocks, feature_size, path_prediction, checkpoint_dir, img_width, img_height,
-          img_depth, subpixel_NN, nn, batch_size=1, div_patches=4, epochs=12):
+          img_depth, subpixel_NN, nn, batch_size=1, div_patches=4, epochs=10):
     traindataset = Train_dataset(batch_size)
     iterations_train = math.ceil((len(traindataset.subject_list) * 0.8) / batch_size)
     num_patches = traindataset.num_patches
@@ -321,7 +322,9 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
                         feature_size=feature_size, is_train=True, reuse=True)
 
     # autoencoder
-    ae_out = autoencoder(x_auto=t_target_image)
+    ae_real = autoencoder(x_auto=t_target_image)
+    ae_fake = autoencoder(x_auto=t_target_image)
+
 
     # ###========================== DEFINE TRAIN OPS ==========================###
 
@@ -349,61 +352,30 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
 
     g_gan_loss = 10e-2 * tf.reduce_mean(tf.square(disc_out_fake - smooth_gan_labels(tf.ones_like(disc_out_real))),
                                         name='g_loss_gan')
-    mse_loss = tf.reduce_sum(
-        tf.square(net_gen.outputs - t_target_image), axis=[0, 1, 2, 3, 4], name='g_loss_mse')
+    #
+    # ae_mse_loss = tf.reduce_sum(
+    #     tf.square(ae_real['z_auto'] - ae_fake['z_auto']), axis=[0, 1, 2, 3, 4], name='ae_loss')
 
-    dx_real = t_target_image[:, 1:, :, :, :] - t_target_image[:, :-1, :, :, :]
-    dy_real = t_target_image[:, :, 1:, :, :] - t_target_image[:, :, :-1, :, :]
-    dz_real = t_target_image[:, :, :, 1:, :] - t_target_image[:, :, :, :-1, :]
-    dx_fake = net_gen.outputs[:, 1:, :, :, :] - net_gen.outputs[:, :-1, :, :, :]
-    dy_fake = net_gen.outputs[:, :, 1:, :, :] - net_gen.outputs[:, :, :-1, :, :]
-    dz_fake = net_gen.outputs[:, :, :, 1:, :] - net_gen.outputs[:, :, :, :-1, :]
-
-    gd_loss = tf.reduce_sum(tf.square(tf.abs(dx_real) - tf.abs(dx_fake))) + \
-              tf.reduce_sum(tf.square(tf.abs(dy_real) - tf.abs(dy_fake))) + \
-              tf.reduce_sum(tf.square(tf.abs(dz_real) - tf.abs(dz_fake)))
-
-    g_loss_mse = mse_loss + g_gan_loss + gd_loss
-
-    g_loss_ae = 10e-2 * tf.reduce_sum(tf.square(ae_real_z - ae_fake_z), axis=[0, 1, 2, 3, 4], name='ae_loss') + g_gan_loss
+    g_loss = tf.reduce_sum(tf.square(ae_real_z - ae_fake_z), axis=[0, 1, 2, 3, 4], name='ae_loss') + g_gan_loss
 
     g_vars = tl.layers.get_variables_with_name('SRGAN_g', True, True)
     d_vars = tl.layers.get_variables_with_name('SRGAN_d', True, True)
 
     with tf.variable_scope('learning_rate'):
-        #lr_v_g = tf.Variable(1e-5, trainable=False)
-        lr_v_g = tf.Variable(1e-4, trainable=False)
-        lr_v_d = tf.Variable(1e-4, trainable=False)
+        lr_v = tf.Variable(1e-4, trainable=False)
     global_step = tf.Variable(0, trainable=False)
     decay_rate = 0.5
     decay_steps = 4920  # every 2 epochs (more or less)
-    learning_rate_g = tf.train.inverse_time_decay(lr_v_g, global_step=global_step, decay_rate=decay_rate,
+    learning_rate = tf.train.inverse_time_decay(lr_v, global_step=global_step, decay_rate=decay_rate,
                                                 decay_steps=decay_steps)
-    learning_rate_d = tf.train.inverse_time_decay(lr_v_d, global_step=global_step, decay_rate=decay_rate,
-                                                  decay_steps=decay_steps)
 
     # Optimizers
-    g_optim_mse = tf.train.AdamOptimizer(learning_rate_d).minimize(g_loss_mse, var_list=g_vars)
-    #Adagrad probado no va mejor que sin ae, si converge (5e-5, 1e-5)
-    #Adam/RMSprop no converge (5e-5)
-    #Adadelta probado no va mejor que sin ae, si converge (5e-5, 1e-4 va peor) va mejor sin lrdecay
-    g_optim_ae = tf.train.AdagradOptimizer(5e-5).minimize(g_loss_ae, var_list=g_vars)
-    d_optim = tf.train.AdamOptimizer(learning_rate_d).minimize(d_loss, var_list=d_vars)
-
+    g_optim = tf.train.AdamOptimizer(learning_rate).minimize(g_loss, var_list=g_vars)
+    d_optim = tf.train.AdamOptimizer(learning_rate).minimize(d_loss, var_list=d_vars)
 
     session = tf.Session()
     tl.layers.initialize_global_variables(session)
 
-    session_ae = tf.Session()
-    session_ae.run(tf.global_variables_initializer())
-    var_list = list()
-
-    for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES):
-         if 'SRGAN' not in v.name and '9' not in v.name and 'learning_rate' not in v.name and 'beta' not in v.name:
-             var_list.append(v)
-    saver_ae = tf.train.Saver(var_list)
-    saver_ae.restore(session_ae, tf.train.latest_checkpoint(AUTOENCODER_CHECPOINTS))
-    initialize_uninitialized_vars(session_ae)
 
     step = 0
 
@@ -436,29 +408,22 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
                 ###========================= train SRGAN =========================###
                 # update D
                 errd, _ = session.run([d_loss, d_optim], {t_target_image: xt, t_input_gen: xgenin})
+                # loss autoencoder
+                x_pred_ae = session.run(gen_test.outputs, {t_input_gen: xgenin})
+                ae_fake_z_val, _ = eval_ae(xt=x_pred_ae)
+                ae_real_z_val, _ = eval_ae(xt=xt)
+                # update G
+                errg, errgan, _ = session.run([g_loss, g_gan_loss, g_optim], {t_input_gen: xgenin, t_target_image: xt,
+                                                              t_input_mask: xm, ae_real_z: ae_real_z_val,
+                                                                              ae_fake_z: ae_fake_z_val})
 
-                if j < 4:
-                    errg, errmse, errgan, errgd, _ = session.run([g_loss_mse, mse_loss, g_gan_loss, gd_loss,
-                                                                  g_optim_mse],
-                                                                 {t_input_gen: xgenin, t_target_image: xt,
-                                                                  t_input_mask: xm})
-                    print(
-                        "Epoch [%2d/%2d] [%4d/%4d] [%4d/%4d]: d_loss: %.8f g_loss: %.8f (mse: %.6f gdl: %.6f adv: %.6f)" % (
-                            j, epochs, i, iterations_train, k, div_patches - 1, errd, errg, errmse, errgd, errgan))
-                else:
-                    # loss autoencoder
-                    x_pred_ae = session.run(gen_test.outputs, {t_input_gen: xgenin})
-                    ae_fake_z_val = session_ae.run(ae_out['z'], {t_target_image: x_pred_ae})
-                    ae_real_z_val = session_ae.run(ae_out['z'], {t_target_image: xt})
-                    # update G
-                    errg, errgan, _ = session.run([g_loss_ae, g_gan_loss, g_optim_ae], {t_input_gen: xgenin,
-                                                                                        t_target_image: xt,
-                                                                  t_input_mask: xm, ae_real_z: ae_real_z_val,
-                                                                                  ae_fake_z: ae_fake_z_val})
-
-                    print(
-                        "Epoch [%2d/%2d] [%4d/%4d] [%4d/%4d]: d_loss: %.8f g_loss: %.8f (adv: %.6f)" % (
-                            j, epochs, i, iterations_train, k, div_patches - 1, errd, errg, errgan))
+                # update G
+                # errg, errgan, ae_loss, _ = session.run([g_loss, g_gan_loss, ae_mse_loss, g_optim],
+                #                                              {t_input_gen: xgenin, t_target_image: xt,
+                #                                               t_input_mask: xm})
+                print(
+                    "Epoch [%2d/%2d] [%4d/%4d] [%4d/%4d]: d_loss: %.8f g_loss: %.8f (adv: %.6f)" % (
+                        j, epochs, i, iterations_train, k, div_patches - 1, errd, errg, errgan))
 
                 ###========================= evaluate & save model =========================###
 
@@ -486,29 +451,19 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
                     img_pred.to_filename(
                         os.path.join(path_prediction, str(j) + str(i) + '.nii.gz'))
 
-                    # x_auto = session_ae.run(ae_out['y'], {t_target_image: xt})
-                    # x_auto_img = x_auto[0]
-                    # if normfactor != 0:
-                    #     x_auto_img = ((x_auto_img + 1) * normfactor)  # denormalize
-                    # img_pred = nib.Nifti1Image(x_auto_img, np.eye(4))
-                    # img_pred.to_filename(
-                    #     os.path.join(path_prediction, str(j) + str(i) + 'yayauto.nii.gz'))
+                    _, x_auto = eval_ae(xt=xt)
+                    x_auto_img = x_auto[0]
+                    if normfactor != 0:
+                        x_auto_img = ((x_auto_img + 1) * normfactor)  # denormalize
+                    img_pred = nib.Nifti1Image(x_auto_img, np.eye(4))
+                    img_pred.to_filename(
+                        os.path.join(path_prediction, str(j) + str(i) + 'auto.nii.gz'))
 
         saver = tf.train.Saver()
         saver.save(sess=session, save_path=checkpoint_dir, global_step=step)
         print("Saved step: [%2d]" % step)
         step = step + 1
 
-
-def initialize_uninitialized_vars(sess):
-    from itertools import compress
-    global_vars = tf.global_variables()
-    is_not_initialized = sess.run([~(tf.is_variable_initialized(var)) \
-                                   for var in global_vars])
-    not_initialized_vars = list(compress(global_vars, is_not_initialized))
-
-    if len(not_initialized_vars):
-        sess.run(tf.variables_initializer(not_initialized_vars))
 
 def evaluate(upsampling_factor, residual_blocks, feature_size, checkpoint_dir_restore, path_volumes, nn, subpixel_NN,
              img_height, img_width, img_depth):

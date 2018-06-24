@@ -13,10 +13,17 @@ from skimage.measure import compare_psnr as psnr
 from keras.layers.convolutional import UpSampling3D
 import argparse
 
-DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds4-gdl-lrdecay/subpixelnn-gauss'
-DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds4-gdl-lrdecay/subpixelnn-gauss/model'
-DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/ds4-gdl-lrdecay/subpixelnn-gauss'
-DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds4-gdl-lrdecay/subpixelnn-gauss'
+#
+
+DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds4-subpixelNN'
+DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds4-subpixelNN/model'
+DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/ds4-subpixelNN'
+DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds4-subpixelNN'
+
+# DEFAULT_SAVE_PATH_PREDICTIONS = '/work/isanchez/predictions/ds4-gdl-lrdecay-ok/subpixel'
+# DEFAULT_SAVE_PATH_CHECKPOINTS = '/work/isanchez/g/ds4-gdl-lrdecay-ok/subpixel/model'
+# DEFAULT_SAVE_PATH_RESTORE_CHECKPOINTS = '/work/isanchez/g/ds4-gdl-lrdecay-ok/subpixel'
+# DEFAULT_SAVE_PATH_VOLUMES = '/work/isanchez/predictions/volumesTF/ds4-gdl-lrdecay-ok/subpixel'
 
 def lrelu1(x):
     return tf.maximum(x, 0.25 * x)
@@ -155,27 +162,27 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, feature_size, img_
             # upscaling block 1
             x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, 64], act=lrelu1,
                             strides=[1, 1, 1, 1, 1],
-                            padding='SAME', W_init=w_init, name='conv1-ub-convnn/1')
+                            padding='SAME', W_init=w_init, name='conv1-ub/1')
             x = UpSampling3D(name='UpSampling3D_1')(x.outputs)
             x = Conv3dLayer(InputLayer(x, name='in ub1 conv2'),
                             shape=[kernel, kernel, kernel, 64, 64],
                             act=lrelu1,
                             strides=[1, 1, 1, 1, 1],
-                            padding='SAME', W_init=w_init, name='conv2-ub-convnn/1')
+                            padding='SAME', W_init=w_init, name='conv2-ub/1')
 
             # upscaling block 2
             if upscaling_factor == 4:
                 x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 64, 64], act=lrelu1,
                                 strides=[1, 1, 1, 1, 1],
-                                padding='SAME', W_init=w_init, name='conv1-ub-convnn/2')
+                                padding='SAME', W_init=w_init, name='conv1-ub/2')
                 x = UpSampling3D(name='UpSampling3D_1')(x.outputs)
                 x = Conv3dLayer(InputLayer(x, name='in ub2 conv2'), shape=[kernel, kernel, kernel, 64,
                                                                            64], act=lrelu1,
                                 strides=[1, 1, 1, 1, 1],
-                                padding='SAME', W_init=w_init, name='conv2-ub-convnn/2')
+                                padding='SAME', W_init=w_init, name='conv2-ub/2')
 
             x = Conv3dLayer(x, shape=[kernel, kernel, kernel, 64, 1], strides=[1, 1, 1, 1, 1],
-                            act=tf.nn.tanh, padding='SAME', W_init=w_init, name='convlast-convnn')
+                            act=tf.nn.tanh, padding='SAME', W_init=w_init, name='convlast')
         else:
             # # ____________SUBPIXEL - BASELINE ______________#
 
@@ -187,7 +194,7 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, feature_size, img_
             # upscaling block 1
             x = Conv3dLayer(x, shape=[kernel, kernel, kernel, feature_size, 64], act=lrelu1,
                             strides=[1, 1, 1, 1, 1],
-                            padding='SAME', W_init=w_init, name='conv1-ub-subpixel/1')
+                            padding='SAME', W_init=w_init, name='conv1-ub/1')
             arguments = {'img_width': img_width, 'img_height': img_height, 'img_depth': img_depth, 'stepsToEnd': steps_to_end,
                          'n_out_channel': int(64/8)}
             x = LambdaLayer(x, fn=subPixelConv3d, fn_args=arguments, name='SubPixel1')
@@ -196,19 +203,19 @@ def generator(input_gen, kernel, nb, upscaling_factor, reuse, feature_size, img_
             if upscaling_factor == 4:
                 x = Conv3dLayer(x, shape=[kernel, kernel, kernel, int((64)/8), 64], act=lrelu1,
                                 strides=[1, 1, 1, 1, 1],
-                                padding='SAME', W_init=w_init, name='conv1-ub-subpixel/2')
+                                padding='SAME', W_init=w_init, name='conv1-ub/2')
                 arguments = {'img_width': img_width, 'img_height': img_height, 'img_depth': img_depth, 'stepsToEnd': 1,
                              'n_out_channel': int(64/8)}
                 x = LambdaLayer(x, fn=subPixelConv3d, fn_args=arguments, name='SubPixel2')
 
             x = Conv3dLayer(x, shape=[kernel, kernel, kernel, int(64/8), 1], strides=[1, 1, 1, 1, 1],
-                            padding='SAME', W_init=w_init, name='convlast-subpixel')
+                            padding='SAME', W_init=w_init, name='convlast')
 
         return x
 
 
 def train(upscaling_factor, residual_blocks, feature_size, path_prediction, checkpoint_dir, img_width, img_height,
-          img_depth, subpixel_NN, nn, batch_size=1, div_patches=4, epochs=10):
+          img_depth, subpixel_NN, nn, restore, batch_size=1, div_patches=4, epochs=10):
     traindataset = Train_dataset(batch_size)
     iterations_train = math.ceil((len(traindataset.subject_list) * 0.8) / batch_size)
     num_patches = traindataset.num_patches
@@ -296,8 +303,18 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
     tl.layers.initialize_global_variables(session)
 
     step = 0
+    saver = tf.train.Saver()
 
-    for j in range(0, epochs):
+    if restore is not None:
+        saver.restore(session, tf.train.latest_checkpoint(restore))
+        val_restore = 0*epochs
+    else:
+        val_restore = 0
+
+    array_psnr = []
+    array_ssim = []
+
+    for j in range(val_restore, epochs + val_restore):
         for i in range(0, iterations_train):
             ###====================== LOAD DATA ===========================###
             xt_total = traindataset.patches_true(i)
@@ -318,9 +335,9 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
                         xt[t] = ((xt[t] - normfactor) / normfactor)
 
                 # RESIZING, don't normalize, XT already normalized
-                x_generator = zoom(xt, [1, (1 / upscaling_factor), (1 / upscaling_factor),
-                                        (1 / upscaling_factor), 1])
-                x_generator = gaussian_filter(x_generator, sigma=1)
+                x_generator = gaussian_filter(xt, sigma=1)
+                x_generator = zoom(x_generator, [1, (1 / upscaling_factor), (1 / upscaling_factor),
+                                        (1 / upscaling_factor), 1], prefilter=False, order=0)
                 xgenin = x_generator
 
                 ###========================= train SRGAN =========================###
@@ -332,24 +349,25 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
                                                               t_input_mask: xm})
                 print(
                     "Epoch [%2d/%2d] [%4d/%4d] [%4d/%4d]: d_loss: %.8f g_loss: %.8f (mse: %.6f gdl: %.6f adv: %.6f)" % (
-                        j, epochs, i, iterations_train, k, div_patches - 1, errd, errg, errmse, errgd, errgan))
+                        j, epochs + val_restore, i, iterations_train, k, div_patches - 1, errd, errg, errmse, errgd,
+                        errgan))
 
                 ###========================= evaluate & save model =========================###
 
                 if k == 1 and i % 20 == 0:
-                    if j == 0:
+                    if j-val_restore == 0:
                         x_true_img = xt[0]
                         if normfactor != 0:
                             x_true_img = ((x_true_img + 1) * normfactor)  # denormalize
-                        img_pred = nib.Nifti1Image(x_true_img, np.eye(4))
-                        img_pred.to_filename(
+                        img_true = nib.Nifti1Image(x_true_img, np.eye(4))
+                        img_true.to_filename(
                             os.path.join(path_prediction, str(j) + str(i) + 'true.nii.gz'))
 
                         x_gen_img = xgenin[0]
                         if normfactor != 0:
                             x_gen_img = ((x_gen_img + 1) * normfactor)  # denormalize
-                        img_pred = nib.Nifti1Image(x_gen_img, np.eye(4))
-                        img_pred.to_filename(
+                        img_gen = nib.Nifti1Image(x_gen_img, np.eye(4))
+                        img_gen.to_filename(
                             os.path.join(path_prediction, str(j) + str(i) + 'gen.nii.gz'))
 
                     x_pred = session.run(gen_test.outputs, {t_input_gen: xgenin})
@@ -360,7 +378,28 @@ def train(upscaling_factor, residual_blocks, feature_size, path_prediction, chec
                     img_pred.to_filename(
                         os.path.join(path_prediction, str(j) + str(i) + '.nii.gz'))
 
-        saver = tf.train.Saver()
+                    max_gen = np.amax(x_pred_img)
+                    max_real = np.amax(x_true_img)
+                    if max_gen > max_real:
+                        val_max = max_gen
+                    else:
+                        val_max = max_real
+                    min_gen = np.amin(x_pred_img)
+                    min_real = np.amin(x_true_img)
+                    if min_gen < min_real:
+                        val_min = min_gen
+                    else:
+                        val_min = min_real
+                    val_psnr = psnr(np.multiply(x_true_img, xm[0]), np.multiply(x_pred_img, xm[0]),
+                                    dynamic_range=val_max - val_min)
+                    val_ssim = ssim(np.multiply(x_true_img, xm[0]), np.multiply(x_pred_img, xm[0]),
+                                    dynamic_range=val_max - val_min, multichannel=True)
+                    array_psnr.append(val_psnr)
+                    array_ssim.append(val_ssim)
+                    print("Val psnr: %.6f Val ssim: %.6f" % (val_psnr, val_ssim))
+                    print("Array psnr: {}".format(array_psnr))
+                    print("Array ssim: {}".format(array_ssim))
+
         saver.save(sess=session, save_path=checkpoint_dir, global_step=step)
         print("Saved step: [%2d]" % step)
         step = step + 1
@@ -402,15 +441,14 @@ def evaluate(upsampling_factor, residual_blocks, feature_size, checkpoint_dir_re
         # extract volumes
         xt_total = traindataset.data_true(654 + i)  # [[self.batch_size, 224, 224, 152]]
         xt_mask = traindataset.mask(654 + i)
-        xg_generated = np.empty([1, 224, 224, 152, 1])
         normfactor = (np.amax(xt_total[0])) / 2
         x_generator = ((xt_total[0] - normfactor) / normfactor)
         res = 1 / upsampling_factor
         x_generator = x_generator[:, :, :, np.newaxis]
-        x_generator = zoom(x_generator, [res, res, res, 1])
         x_generator = gaussian_filter(x_generator, sigma=1)
-        xg_generated[0] = sess.run(srgan_network.outputs, {t_input_gen: x_generator[np.newaxis, :]})
-        xg_generated[0] = ((xg_generated[0] + 1) * normfactor)
+        x_generator = zoom(x_generator, [res, res, res, 1], prefilter=False)
+        xg_generated = sess.run(srgan_network.outputs, {t_input_gen: x_generator[np.newaxis, :]})
+        xg_generated = ((xg_generated + 1) * normfactor)
         volume_real = xt_total[0]
         volume_real = volume_real[:, :, :, np.newaxis]
         volume_generated = xg_generated[0]
@@ -447,6 +485,13 @@ def evaluate(upsampling_factor, residual_blocks, feature_size, checkpoint_dir_re
         img_volume_real = nib.Nifti1Image(volume_real, np.eye(4))
         img_volume_real.to_filename(filename_real)
 
+    np.savez('/work/isanchez/ds4_gdl_lrdecay_ok_RC.npz', psnr=array_psnr, ssim=array_ssim)
+    npzfile = np.load('/work/isanchez/ds4_gdl_lrdecay_ok_RC.npz')
+    print(npzfile['psnr'])
+    print(npzfile['ssim'])
+
+    print('{}{}'.format('PSNR: ', array_psnr))
+    print('{}{}'.format('SSIM: ', array_ssim))
     print('{}{}'.format('Mean PSNR: ', array_psnr.mean()))
     print('{}{}'.format('Mean SSIM: ', array_ssim.mean()))
     print('{}{}'.format('Variance PSNR: ', array_psnr.var()))
@@ -455,6 +500,8 @@ def evaluate(upsampling_factor, residual_blocks, feature_size, checkpoint_dir_re
     print('{}{}'.format('Min PSNR: ', array_psnr.min()))
     print('{}{}'.format('Max SSIM: ', array_ssim.max()))
     print('{}{}'.format('Min SSIM: ', array_ssim.min()))
+    print('{}{}'.format('Median PSNR: ', np.median(array_psnr)))
+    print('{}{}'.format('Median SSIM: ', np.median(array_ssim)))
 
 
 if __name__ == '__main__':
@@ -471,6 +518,7 @@ if __name__ == '__main__':
     parser.add_argument('-subpixel_NN', default=False, help='Use subpixel nearest neighbour')
     parser.add_argument('-nn', default=False, help='Use Upsampling3D + nearest neighbour, RC')
     parser.add_argument('-feature_size', default=32, help='Number of filters')
+    parser.add_argument('-restore', default=None, help='Checkpoint path to restore training')
     args = parser.parse_args()
 
     if args.evaluate:
@@ -482,6 +530,6 @@ if __name__ == '__main__':
         train(upscaling_factor=int(args.upsampling_factor), feature_size=int(args.feature_size),
               subpixel_NN=args.subpixel_NN, nn=args.nn, residual_blocks=int(args.residual_blocks),
               path_prediction=args.path_prediction, checkpoint_dir=args.checkpoint_dir, img_width=128,
-              img_height=128, img_depth=92, batch_size=1)
+              img_height=128, img_depth=92, batch_size=1, restore=args.restore)
 
     # img_width/height/depth = final size [224,224,152]
